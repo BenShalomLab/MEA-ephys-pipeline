@@ -1,0 +1,3 @@
+[submodule "aind-ephys-pipeline"]
+	path = aind-ephys-pipeline
+	url = https://github.com/AllenNeuralDynamics/aind-ephys-pipeline.git
