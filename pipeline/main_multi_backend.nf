@@ -201,7 +201,7 @@ process job_dispatch {
     echo "[${task.tag}] running capsule..."
     cd capsule/code
     chmod +x run
-    ./run ${job_dispatch_args}
+   ./run --input nwb --nwb-files /wynton/group/ahituv/RBS_Lab/Data/nwb_input/maxwell_one_test.nwb ${job_dispatch_args}
 
     MAX_DURATION_MIN=\$(python get_max_recording_duration_min.py)
 
@@ -770,6 +770,62 @@ process nwb_units {
     """
 }
 
+process report_generation {
+    tag 'report-generation'
+    maxForks 1
+    input:
+    val max_duration_minutes
+    path postprocessing_results, stageAs: 'capsule/data/postprocessed'
+    path curation_results, stageAs: 'capsule/data/curated'
+    output:
+    path 'capsule/results/*', emit: results
+    script:
+    """
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p capsule/results
+    echo "[report-generation] cloning git repo..."
+    git clone ${params.git_repo_prefix}ephys-report-generation.git capsule-repo
+    cp -r capsule-repo/code capsule/code
+    echo "[report-generation] running capsule..."
+    for f in capsule/data/postprocessed*; do ANALYZER=\$f; done
+    echo "Found analyzer: \$ANALYZER"
+    /wynton/group/ahituv/bin/miniconda3/envs/env_nf_new/bin/python3 -m pip install openpyxl -q
+    /wynton/group/ahituv/bin/miniconda3/envs/env_nf_new/bin/python3 capsule/code/run_capsule.py \
+        --analyzer-dir "\$ANALYZER" \
+        --output-dir capsule/results \
+        --thresholds '{"firing_rate": 0.1, "presence_ratio": 0.8}'
+    echo "[report-generation] completed!"
+    """
+}
+
+process burst_detection {
+    tag 'burst-detection'
+    maxForks 1
+    input:
+    val max_duration_minutes
+    path report_results, stageAs: 'capsule/data/reports'
+    output:
+    path 'capsule/results/*', emit: results
+    script:
+    """
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p capsule/results
+    echo "[burst-detection] cloning git repo..."
+    git clone ${params.git_repo_prefix}ephys-burst-detection.git capsule-repo
+    cp -r capsule-repo/code capsule/code
+    echo "[burst-detection] running capsule..."
+    for f in capsule/data/reports*; do readlink "\$f" | grep -q "spike_times" && SPIKE_TIMES="\$f" && break; done
+    echo "Found spike times: \$SPIKE_TIMES"
+    /wynton/group/ahituv/bin/miniconda3/envs/env_nf_new/bin/python3 capsule/code/run_capsule.py \
+        --spike-times "\$SPIKE_TIMES" \
+        --output-dir capsule/results \
+        --plot-mode separate
+    echo "[burst-detection] completed!"
+    """
+}
+
 workflow {
     // Input channel from ecephys path
     ecephys_ch = Channel.fromPath(params.ecephys_path + "/", type: 'any')
@@ -852,19 +908,32 @@ workflow {
         visualization_out.results.collect()
     )
 
-    // Quality control
-    quality_control_out = quality_control(
+    // Report generation
+    report_generation_out = report_generation(
         max_duration_minutes,
-        ecephys_ch.collect(),
-        job_dispatch_out.results.flatten(),
-        results_collector_out.qc_data.collect()
+        postprocessing_out.results.collect(),
+        curation_out.results.collect()
     )
 
-    // Quality control collection
-    quality_control_collector(
+    // Burst detection
+    burst_detection(
         max_duration_minutes,
-        quality_control_out.results.collect()
+        report_generation_out.results.collect()
     )
+
+    // Quality control
+//     quality_control_out = quality_control(
+//         max_duration_minutes,
+//         ecephys_ch.collect(),
+//         job_dispatch_out.results.flatten(),
+//         results_collector_out.qc_data.collect()
+//     )
+// 
+//     // Quality control collection
+//     quality_control_collector(
+//         max_duration_minutes,
+//         quality_control_out.results.collect()
+//     )
 
     // NWB ecephys
     nwb_ecephys_out = nwb_ecephys(
