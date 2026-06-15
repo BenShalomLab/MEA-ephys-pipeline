@@ -24,6 +24,59 @@ The pipeline runs:
 
 Nextflow uses `-resume`, so completed steps can be reused instead of rerunning everything.
 
+
+## How the code is organized
+
+Most users only need to clone this main repository:
+
+    BenShalomLab/MEA-ephys-pipeline
+
+The workflow also uses a few separate capsule repositories. Users do not need to clone these manually. The pipeline downloads the pinned versions automatically during the run.
+
+Separate capsule repositories used by the workflow:
+
+    Varda006/aind-ephys-preprocessing
+    Varda006/aind-ephys-curation
+    Varda006/aind-ecephys-nwb
+
+These are kept separate so each pipeline block can be versioned and updated independently. The exact tested versions are pinned in:
+
+    pipeline/capsule_versions.env
+
+### What was modified in the separate capsule repos
+
+#### aind-ephys-preprocessing
+
+This repo contains the preprocessing capsule used before spike sorting.
+
+In this NERSC setup, it is used as the validated preprocessing block for preparing MEA/NWB recordings before Kilosort4. Keeping it as a separate repo allows preprocessing fixes to be made and pinned without copying the whole capsule into the main workflow repository.
+
+#### aind-ephys-curation
+
+This repo contains the curation capsule used after postprocessing.
+
+The pipeline computes many quality metrics during postprocessing and curation. The current default filtering rule uses a small subset of those metrics:
+
+    isi_violations_ratio < 0.5 and presence_ratio > 0.8 and firing_rate > 0.1
+
+This rule keeps units that are active enough, consistently present, and have lower contamination. Users can later modify the curation rule to include additional metrics depending on their experiment.
+
+#### aind-ecephys-nwb
+
+This repo contains the NWB export capsule.
+
+It is used to write processed electrophysiology outputs and curated units into NWB-compatible output. Keeping this capsule separate makes it easier to update NWB export behavior while keeping the main workflow stable.
+
+### Local capsules kept in this main repo
+
+Two custom capsules are kept directly inside this main repository because they are part of the NERSC-validated workflow:
+
+    capsules/report_generation
+    capsules/burst_detection
+
+These two folders were compared against the successful NERSC run work directories and match the code used during validation.
+
+
 ## Files users edit
 
 ### 1. `run_config.env`
