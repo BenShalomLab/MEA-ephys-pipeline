@@ -165,9 +165,10 @@ if (runmode == 'fast'){
 }
 
 // Process definitions
+def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
+
 process job_dispatch {
     tag 'job-dispatch'
-    def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
     container container_name
 
     input:
@@ -201,7 +202,7 @@ process job_dispatch {
     echo "[${task.tag}] running capsule..."
     cd capsule/code
     chmod +x run
-    ./run ${job_dispatch_args}
+    ./run --input nwb ${job_dispatch_args}
 
     MAX_DURATION_MIN=\$(python get_max_recording_duration_min.py)
 
@@ -215,8 +216,7 @@ process job_dispatch {
 
 process preprocessing {
     tag 'preprocessing'
-    def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
-    container container_name
+    container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
 
     input:
     val max_duration_minutes
@@ -244,7 +244,7 @@ process preprocessing {
 
     echo "[${task.tag}] cloning git repo..."
     ${gitCloneFunction}
-    clone_repo "${params.git_repo_prefix}ephys-preprocessing.git" "${versions['PREPROCESSING']}"
+    clone_repo "https://github.com/Varda006/aind-ephys-preprocessing.git" "${versions['PREPROCESSING']}"
 
     echo "[${task.tag}] running capsule..."
     cd capsule/code
@@ -257,8 +257,7 @@ process preprocessing {
 
 process spikesort_kilosort25 {
     tag 'spikesort-kilosort25'
-    def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-spikesort-kilosort25:${params.container_tag}"
-    container container_name
+    container "ghcr.io/allenneuraldynamics/aind-ephys-spikesort-kilosort25:${params.container_tag}"
 
     input:
     val max_duration_minutes
@@ -298,8 +297,7 @@ process spikesort_kilosort25 {
 
 process spikesort_kilosort4 {
     tag 'spikesort-kilosort4'
-    def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-spikesort-kilosort4:${params.container_tag}"
-    container container_name
+    container "ghcr.io/allenneuraldynamics/aind-ephys-spikesort-kilosort4:${params.container_tag}"
 
     input:
     val max_duration_minutes
@@ -339,8 +337,7 @@ process spikesort_kilosort4 {
 
 process spikesort_spykingcircus2 {
     tag 'spikesort-spykingcircus2'
-    def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
-    container container_name
+    container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
 
     input:
     val max_duration_minutes
@@ -380,8 +377,7 @@ process spikesort_spykingcircus2 {
 
 process spikesort_lupin {
     tag 'spikesort-lupin'
-    def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
-    container container_name
+    container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
 
     input:
     val max_duration_minutes
@@ -421,8 +417,7 @@ process spikesort_lupin {
 
 process postprocessing {
     tag 'postprocessing'
-    def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
-    container container_name
+    container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
 
     input:
     val max_duration_minutes
@@ -465,8 +460,7 @@ process postprocessing {
 
 process curation {
     tag 'curation'
-    def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
-    container container_name
+    container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
 
     input:
     val max_duration_minutes
@@ -493,7 +487,7 @@ process curation {
 
     echo "[${task.tag}] cloning git repo..."
     ${gitCloneFunction}
-    clone_repo "${params.git_repo_prefix}ephys-curation.git" "${versions['CURATION']}"
+    clone_repo "https://github.com/Varda006/aind-ephys-curation.git" "${versions['CURATION']}"
 
     echo "[${task.tag}] running capsule..."
     cd capsule/code
@@ -506,8 +500,7 @@ process curation {
 
 process visualization {
     tag 'visualization'
-    def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
-    container container_name
+    container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
 
     input:
     val max_duration_minutes
@@ -552,8 +545,7 @@ process visualization {
 
 process results_collector {
     tag 'result-collector'
-    def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
-    container container_name
+    container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
 
     publishDir "$RESULTS_PATH", saveAs: { filename -> new File(filename).getName() }, mode: 'copy'
 
@@ -601,8 +593,7 @@ process results_collector {
 
 process quality_control {
     tag 'quality-control'
-    def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
-    container container_name
+    container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
 
     input:
     val max_duration_minutes
@@ -644,8 +635,7 @@ process quality_control {
 
 process quality_control_collector {
     tag 'qc-collector'
-    def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
-    container container_name
+    container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
 
     publishDir "$RESULTS_PATH", saveAs: { filename -> new File(filename).getName() }, mode: 'copy'
 
@@ -686,8 +676,7 @@ process quality_control_collector {
 
 process nwb_ecephys {
     tag 'nwb-ecephys'
-    def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-nwb:${params.container_tag}"
-    container container_name
+    container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-nwb:${params.container_tag}"
 
     input:
     val max_duration_minutes
@@ -715,7 +704,7 @@ process nwb_ecephys {
 
     echo "[${task.tag}] cloning git repo..."
     ${gitCloneFunction}
-    clone_repo "${params.git_repo_prefix}ecephys-nwb.git" "${versions['NWB_ECEPHYS']}"
+    clone_repo "https://github.com/Varda006/aind-ecephys-nwb.git" "${versions['NWB_ECEPHYS']}"
 
     echo "[${task.tag}] running capsule..."
     cd capsule/code
@@ -728,8 +717,7 @@ process nwb_ecephys {
 
 process nwb_units {
     tag 'nwb-units'
-    def container_name = "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-nwb:${params.container_tag}"
-    container container_name
+    container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-nwb:${params.container_tag}"
 
     publishDir "$RESULTS_PATH/nwb", saveAs: { filename -> new File(filename).getName() }, mode: 'copy'
 
@@ -767,6 +755,67 @@ process nwb_units {
     ./run
 
     echo "[${task.tag}] completed!"
+    """
+}
+
+process report_generation {
+    tag 'report-generation'
+    container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
+    maxForks 1
+    input:
+    val max_duration_minutes
+    path postprocessing_results, stageAs: 'capsule/data/postprocessed'
+    path curation_results, stageAs: 'capsule/data/curated'
+    output:
+    path 'capsule/results/*', emit: results
+    script:
+    """
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p capsule/results
+    echo "[report-generation] cloning git repo..."
+    git clone https://github.com/BenShalomLab/MEA-ephys-pipeline.git mea-repo
+    cp -r mea-repo/capsules/report_generation/. capsule/code/
+    rm -rf mea-repo
+    echo "[report-generation] running capsule..."
+    for f in capsule/data/postprocessed*; do ANALYZER=\$f; done
+    echo "Found analyzer: \$ANALYZER"
+    python -m pip install openpyxl -q --no-cache-dir --target /tmp/pydeps
+    export PYTHONPATH=/tmp/pydeps:$PYTHONPATH
+    python capsule/code/run_capsule.py \
+        --analyzer-dir "\$ANALYZER" \
+        --output-dir capsule/results \
+        --thresholds '{"firing_rate": 0.1, "presence_ratio": 0.8}'
+    echo "[report-generation] completed!"
+    """
+}
+
+process burst_detection {
+    tag 'burst-detection'
+    container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
+    maxForks 1
+    input:
+    val max_duration_minutes
+    path report_results, stageAs: 'capsule/data/reports'
+    output:
+    path 'capsule/results/*', emit: results
+    script:
+    """
+    #!/usr/bin/env bash
+    set -e
+    mkdir -p capsule/results
+    echo "[burst-detection] cloning git repo..."
+    git clone https://github.com/BenShalomLab/MEA-ephys-pipeline.git mea-repo
+    cp -r mea-repo/capsules/burst_detection/. capsule/code/
+    rm -rf mea-repo
+    echo "[burst-detection] running capsule..."
+    for f in capsule/data/reports*; do readlink "\$f" | grep -q spike_times && SPIKE_TIMES="\$f" && break; done
+    echo "Found spike times: \$SPIKE_TIMES"
+    python capsule/code/run_capsule.py \
+        --spike-times "\$SPIKE_TIMES" \
+        --output-dir capsule/results \
+        --plot-mode separate
+    echo "[burst-detection] completed!"
     """
 }
 
@@ -852,19 +901,32 @@ workflow {
         visualization_out.results.collect()
     )
 
-    // Quality control
-    quality_control_out = quality_control(
+
+    // Report generation
+    report_generation_out = report_generation(
         max_duration_minutes,
-        ecephys_ch.collect(),
-        job_dispatch_out.results.flatten(),
-        results_collector_out.qc_data.collect()
+        postprocessing_out.results.collect(),
+        curation_out.results.collect()
     )
 
-    // Quality control collection
-    quality_control_collector(
+    // Burst detection
+    burst_detection(
         max_duration_minutes,
-        quality_control_out.results.collect()
+        report_generation_out.results.collect()
     )
+    // Quality control disabled for NERSC debug run
+    // Reason: QC currently fails on unsigned raw data during highpass filtering.
+    // quality_control_out = quality_control(
+    //     max_duration_minutes,
+    //     ecephys_ch.collect(),
+    //     job_dispatch_out.results.flatten(),
+    //     results_collector_out.qc_data.collect()
+    // )
+    //
+    // quality_control_collector(
+    //     max_duration_minutes,
+    //     quality_control_out.results.collect()
+    // )
 
     // NWB ecephys
     nwb_ecephys_out = nwb_ecephys(
