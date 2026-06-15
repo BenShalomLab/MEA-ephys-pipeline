@@ -202,7 +202,9 @@ process job_dispatch {
     echo "[${task.tag}] running capsule..."
     cd capsule/code
     chmod +x run
+
     ./run --input nwb ${job_dispatch_args}
+
 
     MAX_DURATION_MIN=\$(python get_max_recording_duration_min.py)
 
@@ -760,7 +762,9 @@ process nwb_units {
 
 process report_generation {
     tag 'report-generation'
+
     container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
+
     maxForks 1
     input:
     val max_duration_minutes
@@ -774,6 +778,7 @@ process report_generation {
     set -e
     mkdir -p capsule/results
     echo "[report-generation] cloning git repo..."
+
     git clone https://github.com/BenShalomLab/MEA-ephys-pipeline.git mea-repo
     cp -r mea-repo/capsules/report_generation/. capsule/code/
     rm -rf mea-repo
@@ -783,6 +788,7 @@ process report_generation {
     python -m pip install openpyxl -q --no-cache-dir --target /tmp/pydeps
     export PYTHONPATH=/tmp/pydeps:$PYTHONPATH
     python capsule/code/run_capsule.py \
+
         --analyzer-dir "\$ANALYZER" \
         --output-dir capsule/results \
         --thresholds '{"firing_rate": 0.1, "presence_ratio": 0.8}'
@@ -792,7 +798,9 @@ process report_generation {
 
 process burst_detection {
     tag 'burst-detection'
+
     container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
+
     maxForks 1
     input:
     val max_duration_minutes
@@ -805,6 +813,7 @@ process burst_detection {
     set -e
     mkdir -p capsule/results
     echo "[burst-detection] cloning git repo..."
+
     git clone https://github.com/BenShalomLab/MEA-ephys-pipeline.git mea-repo
     cp -r mea-repo/capsules/burst_detection/. capsule/code/
     rm -rf mea-repo
@@ -812,6 +821,7 @@ process burst_detection {
     for f in capsule/data/reports*; do readlink "\$f" | grep -q spike_times && SPIKE_TIMES="\$f" && break; done
     echo "Found spike times: \$SPIKE_TIMES"
     python capsule/code/run_capsule.py \
+
         --spike-times "\$SPIKE_TIMES" \
         --output-dir capsule/results \
         --plot-mode separate
@@ -902,6 +912,8 @@ workflow {
     )
 
 
+
+
     // Report generation
     report_generation_out = report_generation(
         max_duration_minutes,
@@ -927,6 +939,20 @@ workflow {
     //     max_duration_minutes,
     //     quality_control_out.results.collect()
     // )
+
+    // Quality control
+//     quality_control_out = quality_control(
+//         max_duration_minutes,
+//         ecephys_ch.collect(),
+//         job_dispatch_out.results.flatten(),
+//         results_collector_out.qc_data.collect()
+//     )
+// 
+//     // Quality control collection
+//     quality_control_collector(
+//         max_duration_minutes,
+//         quality_control_out.results.collect()
+//     )
 
     // NWB ecephys
     nwb_ecephys_out = nwb_ecephys(
