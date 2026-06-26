@@ -1,0 +1,9 @@
+{
+  "job_kwargs": {
+    "chunk_duration": "1s",
+    "progress_bar": false
+  },
+  "sorter": "kilosort4",
+  "do_correction": false,
+  "skip_motion_correction": true
+}

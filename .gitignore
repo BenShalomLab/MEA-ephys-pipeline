@@ -1,0 +1,22 @@
+# Nextflow/cache/runtime
+.nextflow/
+work/
+nextflow_work/
+results/
+logs/
+tmp/
+data/
+
+# Slurm logs
+*.out
+*.err
+
+# Local user config
+run_config.env
+pipeline/nextflow_nersc_local.config
+pipeline/nextflow_nersc.config
+
+# Backups
+*.bak
+*.bak2
+*.before_*
