@@ -31,7 +31,7 @@ Most users only need to clone this main repository:
 
     BenShalomLab/MEA-ephys-pipeline
 
-The workflow also uses a few separate capsule repositories. Users do not need to clone these manually. The pipeline downloads the pinned versions automatically during the run.
+The workflow also uses a few separate capsule repositories. Users do not need to clone these manually. The pipeline downloads the pinned versions automatically during the run. These repositories must be public/readable, or the user must have GitHub access.
 
 Separate capsule repositories used by the workflow:
 
