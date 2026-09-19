@@ -1,14 +1,21 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl = 2
 
-params.ecephys_path = DATA_PATH
+params.ecephys_path = System.getenv('DATA_PATH') ?: System.getenv('DATA_DIR')
+params.results_path = System.getenv('RESULTS_PATH') ?: "${launchDir}/results"
 params.params_file = null
+params.torch_device = null
+// null preserves Nextflow's normal/resume defaults; backends can opt in.
+params.publish_overwrite = null
 
 // Git repository prefix - can be overridden via command line or environment variable
 params.git_repo_prefix = System.getenv('GIT_REPO_PREFIX') ?: 'https://github.com/AllenNeuralDynamics/aind-'
 
-// Helper function for git cloning
-def gitCloneFunction = '''
+// Script-binding variables used by tasks must be visible to Nextflow's cache.
+// With the legacy parser, `def` locals captured by a process closure are not
+// hashed as globals; changing stage JSON or capsule pins could reuse old work.
+// Assign these once before the workflow starts; do not mutate them in operators.
+gitCloneFunction = '''
 clone_repo() {
     local repo_url="$1"
     local commit_hash="$2"
@@ -23,21 +30,29 @@ clone_repo() {
 }
 '''
 
-println "DATA_PATH: ${DATA_PATH}"
-println "RESULTS_PATH: ${RESULTS_PATH}"
+if (!params.ecephys_path) {
+    error 'Set --ecephys_path to a directory containing an NWB recording (or set DATA_PATH / DATA_DIR).'
+}
+println "DATA_PATH: ${params.ecephys_path}"
+println "RESULTS_PATH: ${params.results_path}"
 
 // Load parameters from JSON file if provided
 def json_params = [:]
 if (params.params_file) {
     json_params = new groovy.json.JsonSlurper().parseText(new File(params.params_file).text)
+    if (!(json_params instanceof Map)) {
+        error '--params_file must contain a JSON object keyed by pipeline stage.'
+    }
+    def unknown = json_params.keySet() - ['job_dispatch', 'preprocessing', 'spikesorting', 'postprocessing', 'curation', 'visualization', 'nwb']
+    if (unknown) {
+        error "Unknown stage keys in --params_file: ${unknown}. See scripts/params_no_motion.json for the nested format."
+    }
     println "Loaded parameters from ${params.params_file}"
 }
 
-println "PARAMS: ${params}"
-
 // get commit hashes for capsules
 params.capsule_versions = "${baseDir}/capsule_versions.env"
-def versions = [:]
+versions = [:]
 file(params.capsule_versions).eachLine { line ->
     def (key, value) = line.tokenize('=')
     versions[key] = value
@@ -85,42 +100,42 @@ if (params.params_file) {
 }
 
 // Initialize args variables with params from JSON file or command line args
-def job_dispatch_args = ""
+job_dispatch_args = ""
 if (params.params_file && json_params.job_dispatch) {
     job_dispatch_args = "--params '${groovy.json.JsonOutput.toJson(json_params.job_dispatch)}'"
 } else if ("job_dispatch_args" in params_keys && params.job_dispatch_args instanceof String) {
     job_dispatch_args = params.job_dispatch_args
 }
 
-def preprocessing_args = ""
+preprocessing_args = ""
 if (params.params_file && json_params.preprocessing) {
     preprocessing_args = "--params '${groovy.json.JsonOutput.toJson(json_params.preprocessing)}'"
 } else if ("preprocessing_args" in params_keys && params.preprocessing_args instanceof String) {
     preprocessing_args = params.preprocessing_args
 }
 
-def postprocessing_args = ""
+postprocessing_args = ""
 if (params.params_file && json_params.postprocessing) {
     postprocessing_args = "--params '${groovy.json.JsonOutput.toJson(json_params.postprocessing)}'"
 } else if ("postprocessing_args" in params_keys && params.postprocessing_args instanceof String) {
     postprocessing_args = params.postprocessing_args
 }
 
-def curation_args = ""
+curation_args = ""
 if (params.params_file && json_params.curation) {
     curation_args = "--params '${groovy.json.JsonOutput.toJson(json_params.curation)}'"
 } else if ("curation_args" in params_keys && params.curation_args instanceof String) {
     curation_args = params.curation_args
 }
 
-def visualization_kwargs = ""
+visualization_kwargs = ""
 if (params.params_file && json_params.visualization) {
     visualization_kwargs = "--params '${groovy.json.JsonOutput.toJson(json_params.visualization)}'"
 } else if ("visualization_kwargs" in params_keys && params.visualization_kwargs instanceof String) {
     visualization_kwargs = params.visualization_kwargs
 }
 
-def nwb_ecephys_args = ""
+nwb_ecephys_args = ""
 if (params.params_file && json_params.nwb?.ecephys) {
     nwb_ecephys_args = "--params '${groovy.json.JsonOutput.toJson(json_params.nwb.ecephys)}'"
 } else if ("nwb_ecephys_args" in params_keys && params.nwb_ecephys_args instanceof String) {
@@ -133,23 +148,37 @@ if (params.params_file && json_params.spikesorting) {
     sorter = json_params.spikesorting.sorter ?: null
 }
 
-if (sorter == null && "sorter" in params_keys) {
-    sorter = params.sorter ?: "kilosort4"
-}
+sorter = sorter ?: params.get('sorter', 'kilosort4')
 
-def spikesorting_args = ""
+spikesorting_args = ""
 if (params.params_file && json_params.spikesorting) {
     def sorter_params = json_params.spikesorting[sorter]
     if (sorter_params) {
         spikesorting_args = "--params '${groovy.json.JsonOutput.toJson(sorter_params)}'"
     }
-} else if ("spikesorting_args" in params_keys) {
+} else if ("spikesorting_args" in params_keys && params.spikesorting_args instanceof String) {
     spikesorting_args = params.spikesorting_args
+} else if ("spikesorting_args" in params_keys) {
+    error 'Use --spikesorting_args="--flag" (with an equals sign), or the nested --params_file format.'
 }
 
 if (sorter == null) {
     println "No sorter specified, defaulting to kilosort4"
     sorter = "kilosort4"
+}
+
+// Force an explicit device for CPU/GPU comparisons. Keep the pinned capsule defaults.
+if (params.torch_device) {
+    if (sorter != 'kilosort4' || !(params.torch_device in ['cpu', 'cuda'])) {
+        error '--torch_device must be cpu or cuda and requires --sorter kilosort4.'
+    }
+    if (params.get('spikesorting_args', null)) {
+        error 'Use --params_file with --torch_device so the selected device cannot be overridden by raw arguments.'
+    }
+    def settings = json_params.spikesorting?.kilosort4 ?:
+        new groovy.json.JsonSlurper().parseText(file("${baseDir}/kilosort4_defaults.json").text)
+    settings.sorter.torch_device = params.torch_device
+    spikesorting_args = "--params '${groovy.json.JsonOutput.toJson(settings)}'"
 }
 
 println "Using SORTER: ${sorter} with args: ${spikesorting_args}"
@@ -172,6 +201,7 @@ process job_dispatch {
     container container_name
 
     input:
+    path local_code, stageAs: 'capsule-source'
     path input_folder, stageAs: 'capsule/data/ecephys_session'
     
     output:
@@ -195,9 +225,9 @@ process job_dispatch {
 
     TASK_DIR=\$(pwd)
 
-    echo "[${task.tag}] cloning git repo..."
-    ${gitCloneFunction}
-    clone_repo "${params.git_repo_prefix}ephys-job-dispatch.git" "${versions['JOB_DISPATCH']}"
+    echo "[${task.tag}] staging local capsule code..."
+    cp -rL capsule-source capsule/code
+    # Vendored at the original pin; see capsules/job_dispatch/UPSTREAM.md.
 
     echo "[${task.tag}] running capsule..."
     cd capsule/code
@@ -221,6 +251,7 @@ process preprocessing {
     container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
 
     input:
+    path local_code, stageAs: 'capsule-source'
     val max_duration_minutes
     path ecephys_session_input, stageAs: 'capsule/data/ecephys_session'
     path job_dispatch_results, stageAs: 'capsule/data/*'
@@ -244,14 +275,13 @@ process preprocessing {
         export N_JOBS_EXT=${task.cpus}
     fi
 
-    echo "[${task.tag}] cloning git repo..."
-    ${gitCloneFunction}
-    clone_repo "https://github.com/Varda006/aind-ephys-preprocessing.git" "${versions['PREPROCESSING']}"
+    echo "[${task.tag}] staging local capsule code..."
+    cp -rL capsule-source capsule/code
+    # Vendored at the original pin; see capsules/preprocessing/UPSTREAM.md.
 
     echo "[${task.tag}] running capsule..."
     cd capsule/code
-    chmod +x run
-    ./run ${preprocessing_args} ${job_args}
+    bash run ${preprocessing_args} ${job_args}
 
     echo "[${task.tag}] completed!"
     """
@@ -302,6 +332,7 @@ process spikesort_kilosort4 {
     container "ghcr.io/allenneuraldynamics/aind-ephys-spikesort-kilosort4:${params.container_tag}"
 
     input:
+    path local_code, stageAs: 'capsule-source'
     val max_duration_minutes
     path preprocessing_results, stageAs: 'capsule/data/*'
 
@@ -324,9 +355,9 @@ process spikesort_kilosort4 {
         export N_JOBS_EXT=${task.cpus}
     fi
 
-    echo "[${task.tag}] cloning git repo..."
-    ${gitCloneFunction}
-    clone_repo "${params.git_repo_prefix}ephys-spikesort-kilosort4.git" "${versions['SPIKESORT_KS4']}"
+    echo "[${task.tag}] staging local capsule code..."
+    cp -rL capsule-source capsule/code
+    # Vendored at the original pin; see capsules/kilosort4/UPSTREAM.md.
 
     echo "[${task.tag}] running capsule..."
     cd capsule/code
@@ -422,6 +453,7 @@ process postprocessing {
     container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
 
     input:
+    path local_code, stageAs: 'capsule-source'
     val max_duration_minutes
     path ecephys_session_input, stageAs: 'capsule/data/ecephys_session'
     path job_dispatch_results, stageAs: 'capsule/data/*'
@@ -447,9 +479,9 @@ process postprocessing {
         export N_JOBS_EXT=${task.cpus}
     fi
 
-    echo "[${task.tag}] cloning git repo..."
-    ${gitCloneFunction}
-    clone_repo "${params.git_repo_prefix}ephys-postprocessing.git" "${versions['POSTPROCESSING']}"
+    echo "[${task.tag}] staging local capsule code..."
+    cp -rL capsule-source capsule/code
+    # Vendored at the original pin; see capsules/postprocessing/UPSTREAM.md.
 
     echo "[${task.tag}] running capsule..."
     cd capsule/code
@@ -505,6 +537,7 @@ process visualization {
     container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
 
     input:
+    path local_code, stageAs: 'capsule-source'
     val max_duration_minutes
     path ecephys_session_input, stageAs: 'capsule/data/ecephys_session'
     path job_dispatch_results, stageAs: 'capsule/data/*'
@@ -532,9 +565,9 @@ process visualization {
         export N_JOBS_EXT=${task.cpus}
     fi
 
-    echo "[${task.tag}] cloning git repo..."
-    ${gitCloneFunction}
-    clone_repo "${params.git_repo_prefix}ephys-visualization.git" "${versions['VISUALIZATION']}"
+    echo "[${task.tag}] staging local capsule code..."
+    cp -rL capsule-source capsule/code
+    # Vendored at the original pin; see capsules/visualization/UPSTREAM.md.
 
     echo "[${task.tag}] running capsule..."
     cd capsule/code
@@ -549,7 +582,7 @@ process results_collector {
     tag 'result-collector'
     container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
 
-    publishDir "$RESULTS_PATH", saveAs: { filename -> new File(filename).getName() }, mode: 'copy'
+    publishDir "${params.results_path}", saveAs: { filename -> new File(filename).getName() }, mode: 'copy', overwrite: params.publish_overwrite
 
     input:
     val max_duration_minutes
@@ -587,7 +620,7 @@ process results_collector {
     echo "[${task.tag}] running capsule..."
     cd capsule/code
     chmod +x run
-    ./run --pipeline-data-path ${DATA_PATH} --pipeline-results-path ${RESULTS_PATH}
+    ./run --pipeline-data-path ${params.ecephys_path} --pipeline-results-path ${params.results_path}
 
     echo "[${task.tag}] completed!"
     """
@@ -639,7 +672,7 @@ process quality_control_collector {
     tag 'qc-collector'
     container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
 
-    publishDir "$RESULTS_PATH", saveAs: { filename -> new File(filename).getName() }, mode: 'copy'
+    publishDir "${params.results_path}", saveAs: { filename -> new File(filename).getName() }, mode: 'copy', overwrite: params.publish_overwrite
 
     input:
     val max_duration_minutes
@@ -681,6 +714,7 @@ process nwb_ecephys {
     container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-nwb:${params.container_tag}"
 
     input:
+    path local_code, stageAs: 'capsule-source'
     val max_duration_minutes
     path ecephys_session_input, stageAs: 'capsule/data/ecephys_session'
     path job_dispatch_results, stageAs: 'capsule/data/*'
@@ -704,14 +738,13 @@ process nwb_ecephys {
         export N_JOBS_EXT=${task.cpus}
     fi
 
-    echo "[${task.tag}] cloning git repo..."
-    ${gitCloneFunction}
-    clone_repo "https://github.com/Varda006/aind-ecephys-nwb.git" "${versions['NWB_ECEPHYS']}"
+    echo "[${task.tag}] staging local capsule code..."
+    cp -rL capsule-source capsule/code
+    # Vendored at the original pin; see capsules/nwb_ecephys/UPSTREAM.md.
 
     echo "[${task.tag}] running capsule..."
     cd capsule/code
-    chmod +x run
-    ./run ${nwb_ecephys_args}
+    bash run ${nwb_ecephys_args}
 
     echo "[${task.tag}] completed!"
     """
@@ -721,9 +754,10 @@ process nwb_units {
     tag 'nwb-units'
     container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-nwb:${params.container_tag}"
 
-    publishDir "$RESULTS_PATH/nwb", saveAs: { filename -> new File(filename).getName() }, mode: 'copy'
+    publishDir "${params.results_path}/nwb", saveAs: { filename -> new File(filename).getName() }, mode: 'copy', overwrite: params.publish_overwrite
 
     input:
+    path local_code, stageAs: 'capsule-source'
     val max_duration_minutes
     path ecephys_session_input, stageAs: 'capsule/data/ecephys_session'
     path job_dispatch_results, stageAs: 'capsule/data/*'
@@ -743,9 +777,9 @@ process nwb_units {
     mkdir -p capsule/results
     mkdir -p capsule/scratch
 
-    echo "[${task.tag}] cloning git repo..."
-    ${gitCloneFunction}
-    clone_repo "${params.git_repo_prefix}units-nwb.git" "${versions['NWB_UNITS']}"
+    echo "[${task.tag}] staging local capsule code..."
+    cp -rL capsule-source capsule/code
+    # Vendored at the original pin; see capsules/nwb_units/UPSTREAM.md.
 
     if [[ ${params.executor} == "slurm" ]]; then
         echo "[${task.tag}] allocated task time: ${task.time}"
@@ -761,80 +795,65 @@ process nwb_units {
 }
 
 process report_generation {
-    tag 'report-generation'
-
+    tag { "report-generation:${recording_id}" }
     container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
+    publishDir "${params.results_path}/reports", saveAs: { filename -> new File(filename).getName() }, mode: 'copy', overwrite: params.publish_overwrite
 
-    maxForks 1
     input:
-    val max_duration_minutes
-    path postprocessing_results, stageAs: 'capsule/data/postprocessed'
-    path curation_results, stageAs: 'capsule/data/curated'
+    tuple val(recording_id), path(analyzer, stageAs: 'capsule/data/analyzer.zarr')
+    path report_code, stageAs: 'capsule/code'
+
     output:
-    path 'capsule/results/*', emit: results
+    tuple val(recording_id), path('capsule/results/*'), emit: results
+
     script:
     """
     #!/usr/bin/env bash
     set -e
-    mkdir -p capsule/results
-    echo "[report-generation] cloning git repo..."
-
-    git clone https://github.com/BenShalomLab/MEA-ephys-pipeline.git mea-repo
-    cp -r mea-repo/capsules/report_generation/. capsule/code/
-    rm -rf mea-repo
-    echo "[report-generation] running capsule..."
-    for f in capsule/data/postprocessed*; do ANALYZER=\$f; done
-    echo "Found analyzer: \$ANALYZER"
-    python -m pip install openpyxl -q --no-cache-dir --target /tmp/pydeps
-    export PYTHONPATH=/tmp/pydeps:$PYTHONPATH
+    mkdir -p 'capsule/results/${recording_id}'
+    python -m pip install openpyxl==3.1.5 --no-deps -q --no-cache-dir --target capsule/pydeps
+    python -m pip install et-xmlfile==2.0.0 --no-deps -q --no-cache-dir --target capsule/pydeps
+    export PYTHONPATH="\$(pwd)/capsule/pydeps:\${PYTHONPATH:-}"
     python capsule/code/run_capsule.py \
-
-        --analyzer-dir "\$ANALYZER" \
-        --output-dir capsule/results \
+        --analyzer-dir capsule/data/analyzer.zarr \
+        --output-dir 'capsule/results/${recording_id}' \
         --thresholds '{"firing_rate": 0.1, "presence_ratio": 0.8}'
-    echo "[report-generation] completed!"
     """
 }
 
 process burst_detection {
-    tag 'burst-detection'
-
+    tag { "burst-detection:${recording_id}" }
     container "ghcr.io/allenneuraldynamics/aind-ephys-pipeline-base:${params.container_tag}"
+    publishDir "${params.results_path}/bursts", saveAs: { filename -> new File(filename).getName() }, mode: 'copy', overwrite: params.publish_overwrite
 
-    maxForks 1
     input:
-    val max_duration_minutes
-    path report_results, stageAs: 'capsule/data/reports'
+    tuple val(recording_id), path(spike_times, stageAs: 'capsule/data/spike_times.npy')
+    path burst_code, stageAs: 'capsule/code'
+
     output:
-    path 'capsule/results/*', emit: results
+    tuple val(recording_id), path('capsule/results/*'), emit: results
+
     script:
     """
     #!/usr/bin/env bash
     set -e
-    mkdir -p capsule/results
-    echo "[burst-detection] cloning git repo..."
-
-    git clone https://github.com/BenShalomLab/MEA-ephys-pipeline.git mea-repo
-    cp -r mea-repo/capsules/burst_detection/. capsule/code/
-    rm -rf mea-repo
-    echo "[burst-detection] running capsule..."
-    for f in capsule/data/reports*; do readlink "\$f" | grep -q spike_times && SPIKE_TIMES="\$f" && break; done
-    echo "Found spike times: \$SPIKE_TIMES"
+    mkdir -p 'capsule/results/${recording_id}'
     python capsule/code/run_capsule.py \
-
-        --spike-times "\$SPIKE_TIMES" \
-        --output-dir capsule/results \
+        --spike-times capsule/data/spike_times.npy \
+        --output-dir 'capsule/results/${recording_id}' \
         --plot-mode separate
-    echo "[burst-detection] completed!"
     """
 }
 
 workflow {
     // Input channel from ecephys path
-    ecephys_ch = Channel.fromPath(params.ecephys_path + "/", type: 'any')
+    ecephys_ch = Channel.fromPath(params.ecephys_path, type: 'dir', checkIfExists: true)
 
     // Job dispatch
-    job_dispatch_out = job_dispatch(ecephys_ch.collect())
+    job_dispatch_out = job_dispatch(
+        Channel.value(file("${baseDir}/../capsules/job_dispatch/code")),
+        ecephys_ch.collect()
+    )
 
     max_duration_file = job_dispatch_out.max_duration_file
     max_duration_minutes = max_duration_file.map { it.text.trim() }
@@ -842,6 +861,7 @@ workflow {
 
     // Preprocessing
     preprocessing_out = preprocessing(
+        Channel.value(file("${baseDir}/../capsules/preprocessing/code")),
         max_duration_minutes,
         ecephys_ch.collect(),
         job_dispatch_out.results.flatten()
@@ -856,6 +876,7 @@ workflow {
         )
     } else if (sorter == 'kilosort4') {
         spikesort_out = spikesort_kilosort4(
+            Channel.value(file("${baseDir}/../capsules/kilosort4/code")),
             max_duration_minutes,
             preprocessing_out.results
         )
@@ -875,6 +896,7 @@ workflow {
 
     // Postprocessing
     postprocessing_out = postprocessing(
+        Channel.value(file("${baseDir}/../capsules/postprocessing/code")),
         max_duration_minutes,
         ecephys_ch.collect(),
         job_dispatch_out.results.flatten(),
@@ -890,6 +912,7 @@ workflow {
 
     // Visualization
     visualization_out = visualization(
+        Channel.value(file("${baseDir}/../capsules/visualization/code")),
         max_duration_minutes,
         ecephys_ch.collect(),
         job_dispatch_out.results.collect(),
@@ -914,17 +937,17 @@ workflow {
 
 
 
-    // Report generation
+    // Stage the code in this checkout and select one analyzer explicitly per recording.
+    analyzer_ch = postprocessing_out.results.flatten()
+        .filter { it.name.startsWith('postprocessed_') && it.name.endsWith('.zarr') }
+        .map { analyzer -> tuple(analyzer.name.replaceFirst(/^postprocessed_/, '').replaceFirst(/\.zarr$/, ''), analyzer) }
     report_generation_out = report_generation(
-        max_duration_minutes,
-        postprocessing_out.results.collect(),
-        curation_out.results.collect()
+        analyzer_ch,
+        Channel.value(file("${baseDir}/../capsules/report_generation"))
     )
-
-    // Burst detection
     burst_detection(
-        max_duration_minutes,
-        report_generation_out.results.collect()
+        report_generation_out.results.map { id, folder -> tuple(id, folder.resolve('spike_times.npy')) },
+        Channel.value(file("${baseDir}/../capsules/burst_detection"))
     )
     // Quality control disabled for NERSC debug run
     // Reason: QC currently fails on unsigned raw data during highpass filtering.
@@ -956,6 +979,7 @@ workflow {
 
     // NWB ecephys
     nwb_ecephys_out = nwb_ecephys(
+        Channel.value(file("${baseDir}/../capsules/nwb_ecephys/code")),
         max_duration_minutes,
         ecephys_ch.collect(),
         job_dispatch_out.results.collect(),
@@ -963,6 +987,7 @@ workflow {
 
     // NWB units
     nwb_units(
+        Channel.value(file("${baseDir}/../capsules/nwb_units/code")),
         max_duration_minutes,
         ecephys_ch.collect(),
         job_dispatch_out.results.collect(),
